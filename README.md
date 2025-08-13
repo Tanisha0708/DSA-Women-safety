@@ -218,3 +218,19 @@ with open(complaint_file_path, "w", encoding="utf-8") as f:
 
 transcript_path, complaint_file_path
 
+
+
+# Some Clicks of Project Output
+<img width="1903" height="830" alt="image" src="https://github.com/user-attachments/assets/9d0c1306-63bb-440d-bbc9-9be6a6939b78" />
+<img width="1861" height="823" alt="image" src="https://github.com/user-attachments/assets/1a167e72-65ea-4b47-9682-95ae95bbf2e9" />
+<img width="1886" height="820" alt="image" src="https://github.com/user-attachments/assets/3974d58f-3ca2-42be-9a8b-9f043ae49c1e" />
+<img width="1864" height="818" alt="image" src="https://github.com/user-attachments/assets/207196a2-75ec-4a86-b14e-b6160aec458f" />
+<img width="1871" height="837" alt="image" src="https://github.com/user-attachments/assets/b76d71bd-3c21-46e7-b12d-286fb0d32d6b" />
+<img width="1898" height="727" alt="image" src="https://github.com/user-attachments/assets/0a94797f-a00a-46ca-99fa-be4ece433112" />
+
+
+
+
+
+
+
