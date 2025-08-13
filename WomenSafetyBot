@@ -1,0 +1,613 @@
+package newone;
+import java.io.*;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+
+/**
+ * WomenSafetyBot
+ * Console-based women safety assistant
+ * DSA used: Trie (law keyword lookup), KMP (pattern search), Stack (history/undo),
+ * Queue (chat queue), PriorityQueue (emergency contacts by priority), HashMap (KB).
+ *
+ * NOTE: All data is in-memory; complaint drafts are saved as .txt files.
+ */
+public class WomenSafetyBot {
+
+    // ========= UI COLORS =========
+    static class UI {
+        static final String RESET = "\u001B[0m";
+        static final String BOLD = "\u001B[1m";
+        static final String DIM = "\u001B[2m";
+        static final String ITALIC = "\u001B[3m";
+        static final String UNDER = "\u001B[4m";
+
+        static final String BLACK = "\u001B[30m";
+        static final String RED = "\u001B[31m";
+        static final String GREEN = "\u001B[32m";
+        static final String YELLOW = "\u001B[33m";
+        static final String BLUE = "\u001B[34m";
+        static final String MAGENTA = "\u001B[35m";
+        static final String CYAN = "\u001B[36m";
+        static final String WHITE = "\u001B[37m";
+
+        static final String BG_DARK = "\u001B[48;5;236m";
+        static final String BG_MID = "\u001B[48;5;238m";
+        static final String BG_LIGHT = "\u001B[48;5;240m";
+
+        static boolean colorEnabled = true;
+
+        static String c(String color, String text) {
+            if (!colorEnabled) return text;
+            return color + text + RESET;
+        }
+
+        static void banner() {
+            String[] lines = new String[]{
+                    "╔═══════════════════════════════════════════════════════╗",
+                    "║         W O M E N S A F E T Y   C H A T B O T         ║",
+                    "║     Your console ally for awareness and assistance     ║",
+                    "╚═══════════════════════════════════════════════════════╝"
+            };
+            for (String l : lines) System.out.println(c(CYAN, l));
+        }
+
+        static void divider() {
+            System.out.println(c(DIM, "────────────────────────────────────────────────────────────"));
+        }
+
+        static void title(String text) {
+            System.out.println(c(BOLD + MAGENTA, "◆ " + text));
+        }
+
+        static void success(String text) {
+            System.out.println(c(GREEN, "✔ " + text));
+        }
+
+        static void warn(String text) {
+            System.out.println(c(YELLOW, "⚠ " + text));
+        }
+
+        static void error(String text) {
+            System.out.println(c(RED, "✖ " + text));
+        }
+
+        static void info(String text) {
+            System.out.println(c(BLUE, "ℹ " + text));
+        }
+
+        static void typing(String text, int msDelay) {
+            for (char ch : text.toCharArray()) {
+                System.out.print(ch);
+                try { Thread.sleep(msDelay); } catch (InterruptedException ignored) {}
+            }
+            System.out.println();
+        }
+
+        static void progressBar(String label, int steps, int delayMs) {
+            System.out.print(label + " ");
+            for (int i = 0; i < steps; i++) {
+                System.out.print(c(CYAN, "▮"));
+                try { Thread.sleep(delayMs); } catch (InterruptedException ignored) {}
+            }
+            System.out.println(" " + c(DIM, "done"));
+        }
+    }
+
+    // ========= DATA MODELS =========
+    static class Contact implements Comparable<Contact> {
+        String name;
+        String phone;
+        int priority; // higher = more important
+        Contact(String name, String phone, int priority) {
+            this.name = name; this.phone = phone; this.priority = priority;
+        }
+        @Override public int compareTo(Contact o) {
+            return Integer.compare(o.priority, this.priority);
+        }
+        @Override public String toString() {
+            return String.format("%s (%s) [priority %d]", name, phone, priority);
+        }
+    }
+
+    static class ComplaintDraft {
+        String fullName;
+        String address;
+        String email;
+        String phone;
+        String authority;   // e.g., "Police Station, XYZ"
+        String subject;
+        String incidentDate;
+        String incidentLocation;
+        String details;
+        String accusedName;
+        String attachments;
+        LocalDateTime created = LocalDateTime.now();
+
+        String render() {
+            String dateStr = LocalDate.now().format(DateTimeFormatter.ofPattern("dd MMM yyyy"));
+            return "To,\n" +
+                   authority + "\n\n" +
+                   "Date: " + dateStr + "\n\n" +
+                   "Subject: " + subject + "\n\n" +
+                   "Respected Sir/Madam,\n\n" +
+                   "I, " + fullName + " (Phone: " + phone + ", Email: " + email + "), residing at " + address + ",\n" +
+                   "wish to formally lodge a complaint regarding the incident that occurred on " + incidentDate + " at " + incidentLocation + ".\n\n" +
+                   "Details of the incident:\n" +
+                   details + "\n\n" +
+                   (accusedName == null || accusedName.isEmpty() ? "" : "Accused involved (if known): " + accusedName + "\n\n") +
+                   (attachments == null || attachments.isEmpty() ? "" : "Attachments enclosed: " + attachments + "\n\n") +
+                   "I request that appropriate legal action be taken as per the applicable laws. I am willing to cooperate and provide any further information required.\n\n" +
+                   "Thank you.\n\n" +
+                   "Sincerely,\n" +
+                   fullName + "\n" +
+                   address + "\n" +
+                   "Phone: " + phone + " | Email: " + email + "\n";
+        }
+    }
+
+    // ========= KNOWLEDGE BASE (simplified) =========
+    // You can extend this map with more entries. For real apps, load from JSON/db.
+    static class KnowledgeBase {
+        Map<String, String> answerByKey = new HashMap<>();
+        Trie trie = new Trie();
+
+        KnowledgeBase() {
+            put("sexual harassment", "Sexual harassment is any unwelcome act with sexual overtones—verbal, non-verbal, or physical. Seek help, document evidence, and consider reporting to local authorities or internal committees where applicable.");
+            put("domestic violence", "Domestic violence includes physical, emotional, economic, or sexual abuse by a partner or family member. Keep a safety plan, document injuries, and reach out to trusted contacts or local helplines.");
+            put("stalking", "Stalking involves repeated following, contacting, or monitoring that causes fear or distress. Preserve messages/calls as evidence and consider filing a complaint.");
+            put("cyber harassment", "Cyber harassment includes online threats, doxxing, non-consensual image sharing, and abuse. Collect screenshots/URLs, use platform reporting tools, and change passwords.");
+            put("consent", "Consent must be freely given, informed, and revocable at any time. Silence or lack of resistance is not consent.");
+            put("dowry", "Demanding or giving dowry is illegal. Document any demands and financial exchanges and seek legal counsel or aid organizations.");
+            put("workplace harassment", "Workplace harassment can be addressed through your Internal Complaints Committee (ICC) where applicable; document incidents and approach HR or legal aid.");
+            // Add more as needed
+        }
+
+        void put(String key, String value) {
+            answerByKey.put(key, value);
+            trie.insert(key);
+        }
+
+        // Keyword suggestions using Trie prefix
+        List<String> suggest(String prefix) {
+            return trie.startsWith(prefix.toLowerCase());
+        }
+
+        // Retrieve best answer using KMP-based keyword presence
+        String bestAnswer(String userQuery) {
+            String q = userQuery.toLowerCase();
+            String bestKey = null;
+            int bestScore = -1;
+            for (String key : answerByKey.keySet()) {
+                int score = containsKMP(q, key) ? key.length() : 0;
+                if (score > bestScore) { bestScore = score; bestKey = key; }
+            }
+            if (bestKey != null) return answerByKey.get(bestKey);
+            return null;
+        }
+    }
+
+    // ========= TRIE (for law/keyword suggestions) =========
+    static class Trie {
+        static class Node {
+            Node[] next = new Node[26];
+            boolean end;
+        }
+        Node root = new Node();
+
+        void insert(String word) {
+            String w = word.toLowerCase().replaceAll("[^a-z]", " ");
+            for (String token : w.split("\\s+")) {
+                if (token.isEmpty()) continue;
+                Node cur = root;
+                for (char ch : token.toCharArray()) {
+                    int i = ch - 'a';
+                    if (i < 0 || i >= 26) continue;
+                    if (cur.next[i] == null) cur.next[i] = new Node();
+                    cur = cur.next[i];
+                }
+                cur.end = true;
+            }
+        }
+
+        List<String> startsWith(String pref) {
+            String p = pref.toLowerCase().replaceAll("[^a-z]", "");
+            List<String> result = new ArrayList<>();
+            if (p.isEmpty()) return result;
+            Node node = root;
+            for (char ch : p.toCharArray()) {
+                int i = ch - 'a';
+                if (i < 0 || i >= 26 || node.next[i] == null) return result;
+                node = node.next[i];
+            }
+            // DFS to build words from prefix
+            dfs(node, new StringBuilder(p), result, 10);
+            return result;
+        }
+
+        void dfs(Node node, StringBuilder sb, List<String> out, int limit) {
+            if (out.size() >= limit) return;
+            if (node.end) out.add(sb.toString());
+            for (int i = 0; i < 26 && out.size() < limit; i++) {
+                if (node.next[i] != null) {
+                    sb.append((char) ('a' + i));
+                    dfs(node.next[i], sb, out, limit);
+                    sb.deleteCharAt(sb.length() - 1);
+                }
+            }
+        }
+    }
+
+    // ========= KMP (pattern existence) =========
+    static boolean containsKMP(String text, String pattern) {
+        text = text.toLowerCase();
+        pattern = pattern.toLowerCase();
+        int[] lps = buildLPS(pattern);
+        int i = 0, j = 0;
+        while (i < text.length()) {
+            if (j < pattern.length() && text.charAt(i) == pattern.charAt(j)) {
+                i++; j++;
+                if (j == pattern.length()) return true;
+            } else if (j > 0) {
+                j = lps[j - 1];
+            } else {
+                i++;
+            }
+        }
+        return false;
+    }
+    static int[] buildLPS(String p) {
+        int[] lps = new int[p.length()];
+        int len = 0;
+        for (int i = 1; i < p.length(); ) {
+            if (p.charAt(i) == p.charAt(len)) {
+                lps[i++] = ++len;
+            } else if (len > 0) {
+                len = lps[len - 1];
+            } else {
+                lps[i++] = 0;
+            }
+        }
+        return lps;
+    }
+
+    // ========= BOT STATE =========
+    private final Scanner in = new Scanner(System.in);
+    private final KnowledgeBase kb = new KnowledgeBase();
+    private final PriorityQueue<Contact> emergencyContacts = new PriorityQueue<>();
+    private final Stack<String> history = new Stack<>();
+    private final Queue<String> chatQueue = new ArrayDeque<>();
+    private boolean running = true;
+
+    // ========= MAIN =========
+    public static void main(String[] args) {
+        // Enable or disable colors for Windows older terminals if needed
+        UI.colorEnabled = supportsAnsi();
+        WomenSafetyBot app = new WomenSafetyBot();
+        app.seedContacts();
+        UI.banner();
+        UI.info("Disclaimer: This assistant provides general information only and is not a substitute for professional legal advice.");
+        app.mainLoop();
+        UI.divider();
+        UI.success("Goodbye. Stay safe and take care.");
+    }
+
+    // Try to detect ANSI support (simple heuristic).
+    static boolean supportsAnsi() {
+        String os = System.getProperty("os.name", "").toLowerCase();
+        // Modern Windows terminals support ANSI; fallback true for simplicity
+        return !os.contains("win") || true;
+    }
+
+    void seedContacts() {
+        emergencyContacts.add(new Contact("Trusted Friend", "9999999999", 5));
+        emergencyContacts.add(new Contact("Parent", "8888888888", 4));
+        emergencyContacts.add(new Contact("Local Helpline", "112", 10)); // India emergency number
+        emergencyContacts.add(new Contact("Women Helpline", "181", 9));
+    }
+
+    void mainLoop() {
+        while (running) {
+            UI.divider();
+            printMainMenu();
+            int choice = readInt("Choose an option: ");
+            history.push("menu:" + choice);
+            switch (choice) {
+                case 1 -> lawAndRightsCenter();
+                case 2 -> complaintDesk();
+                case 3 -> safetyAssistant();
+                case 4 -> resourcesAndTips();
+                case 5 -> manageContacts();
+                case 6 -> viewHistory();
+                case 7 -> {
+                    running = false;
+                }
+                default -> UI.error("Invalid choice. Please try again.");
+            }
+        }
+    }
+
+    void printMainMenu() {
+        UI.title("Home");
+        System.out.println(UI.c(UI.BOLD, "1. Ask about laws & rights  ") + UI.c(UI.DIM, " (Trie + KMP powered)"));
+        System.out.println(UI.c(UI.BOLD, "2. Draft a formal complaint ") + UI.c(UI.DIM, " (saves to .txt)"));
+        System.out.println(UI.c(UI.BOLD, "3. Safety assistant         ") + UI.c(UI.DIM, " (guided steps + SOS)"));
+        System.out.println(UI.c(UI.BOLD, "4. Resources & safety tips  "));
+        System.out.println(UI.c(UI.BOLD, "5. Manage emergency contacts") + UI.c(UI.DIM, " (PriorityQueue)"));
+        System.out.println(UI.c(UI.BOLD, "6. View session history     ") + UI.c(UI.DIM, " (Stack)"));
+        System.out.println(UI.c(UI.BOLD, "7. Exit                     "));
+    }
+
+    // ========= FEATURE 1: Law & Rights =========
+    void lawAndRightsCenter() {
+        UI.title("Ask about Laws & Rights (general awareness)");
+        UI.info("Type your question (e.g., \"What to do in case of cyber harassment?\")");
+        UI.info("Tip: Start typing a keyword for suggestions. Type " + UI.c(UI.BOLD, ":suggest <prefix>") + " or " + UI.c(UI.BOLD, ":back") + " to return.");
+        while (true) {
+            System.out.print(UI.c(UI.CYAN, "Q> "));
+            String q = in.nextLine().trim();
+            if (q.equalsIgnoreCase(":back")) return;
+            if (q.toLowerCase().startsWith(":suggest")) {
+                String[] parts = q.split("\\s+", 2);
+                String pref = parts.length > 1 ? parts[1] : "";
+                List<String> sug = kb.suggest(pref);
+                if (sug.isEmpty()) UI.warn("No suggestions for: " + pref);
+                else UI.info("Suggestions: " + String.join(", ", sug));
+                continue;
+            }
+            if (q.isEmpty()) continue;
+
+            String ans = kb.bestAnswer(q);
+            if (ans != null) {
+                UI.typing(UI.c(UI.GREEN, "A> ") + ans, 10);
+                // Add quick next steps
+                UI.info("Next steps: document evidence, ensure personal safety, and consider contacting trusted people or helplines (112 / 181).");
+            } else {
+                UI.warn("I don’t have a direct answer for that query.");
+                String hint = "Try keywords like: sexual harassment, stalking, cyber harassment, consent, domestic violence, dowry, workplace harassment.";
+                UI.info(hint);
+            }
+            history.push("lawQ:" + q);
+        }
+    }
+
+    // ========= FEATURE 2: Complaint Draft =========
+    void complaintDesk() {
+        UI.title("Complaint Desk (Draft a Formal Complaint)");
+        ComplaintDraft d = new ComplaintDraft();
+        d.fullName = prompt("Your full name: ");
+        d.address = prompt("Your address: ");
+        d.email = prompt("Your email: ");
+        d.phone = prompt("Your phone: ");
+        d.authority = prompt("Authority/Office (e.g., Station House Officer, XYZ Police Station): ");
+        d.subject = prompt("Subject (short): ");
+        d.incidentDate = prompt("Incident date (e.g., 12 Aug 2025): ");
+        d.incidentLocation = prompt("Incident location: ");
+        d.details = promptMultiline("Describe the incident (end with a single '.' on a new line): ");
+        d.accusedName = prompt("Accused name(s) if known (optional): ");
+        d.attachments = prompt("Attachments (comma-separated, optional): ");
+
+        UI.divider();
+        UI.title("Preview");
+        System.out.println(d.render());
+
+        if (yesNo("Save this complaint draft as a .txt file?")) {
+            String safeName = d.fullName.replaceAll("[^a-zA-Z0-9]+", "_");
+            String fileName = "Complaint_" + safeName + "_" +
+                    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".txt";
+            try (FileWriter fw = new FileWriter(fileName)) {
+                fw.write(d.render());
+                fw.flush();
+                UI.success("Saved: " + fileName);
+            } catch (IOException e) {
+                UI.error("Failed to save file: " + e.getMessage());
+            }
+        }
+        history.push("complaint:" + d.subject);
+    }
+
+    // ========= FEATURE 3: Safety Assistant =========
+    void safetyAssistant() {
+        UI.title("Safety Assistant");
+        UI.info("I’ll ask a few quick questions to guide you. You can type " + UI.c(UI.BOLD, ":exit") + " to stop.");
+        String immediateDanger = promptLower("Are you currently in immediate danger? (yes/no): ");
+        if ("yes".equals(immediateDanger)) {
+            UI.warn("If safe, consider calling emergency number: 112 (India) or your local emergency number.");
+            UI.progressBar("Preparing quick SOS info", 15, 30);
+            showSOSCard();
+            return;
+        }
+
+        String locationSafe = promptLower("Are you in a safe location right now? (yes/no): ");
+        if ("no".equals(locationSafe)) {
+            UI.warn("If possible, move to a safer, well-lit public area. Keep your phone ready.");
+        }
+
+        String needEscort = promptLower("Do you want a quick personal safety plan checklist? (yes/no): ");
+        if ("yes".equals(needEscort)) {
+            printSafetyPlan();
+        }
+
+        String wantSim = promptLower("Generate an SOS message template you can copy? (yes/no): ");
+        if ("yes".equals(wantSim)) {
+            showSOSCard();
+        }
+
+        history.push("safetyFlow");
+    }
+
+    void showSOSCard() {
+        UI.divider();
+        UI.title("SOS Card (copy & send if needed)");
+        Contact top = emergencyContacts.peek();
+        List<Contact> list = new ArrayList<>(emergencyContacts);
+        Collections.sort(list); // by priority desc
+
+        String msg =
+                "SOS! I need urgent help.\n" +
+                "My live location: <share current location link>\n" +
+                "Details (brief): <what happened>\n" +
+                "Call me ASAP: <your phone>\n" +
+                "Nearest landmark: <landmark>\n" +
+                "If unreachable, contact: " + (top != null ? top.name + " (" + top.phone + ")" : "<trusted person>") + "\n" +
+                "Time: " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm"));
+        System.out.println(UI.c(UI.BOLD, box(msg)));
+
+        UI.info("Top emergency contacts (by priority):");
+        for (int i = 0; i < Math.min(5, list.size()); i++) {
+            System.out.println("  - " + list.get(i));
+        }
+        UI.warn("Note: This app cannot send messages. Copy the SOS text above and share via your phone.");
+    }
+
+    void printSafetyPlan() {
+        UI.divider();
+        UI.title("Quick Personal Safety Plan");
+        String[] tips = new String[]{
+                "Share your trip with a trusted contact and turn on location sharing.",
+                "Keep your phone charged; carry a portable power bank if possible.",
+                "Identify safe spots nearby (police station, hospital, busy stores).",
+                "If threatened, be loud and attract attention; move towards crowds.",
+                "Trust your instincts; choose safer routes even if longer.",
+                "Keep emergency numbers handy: 112 (India), 181 (Women Helpline).",
+                "Preserve evidence: messages, photos, medical records if any.",
+                "After the incident, consider seeking professional support."
+        };
+        for (String tip : tips) {
+            UI.typing("• " + tip, 8);
+        }
+    }
+
+    // ========= FEATURE 4: Resources =========
+    void resourcesAndTips() {
+        UI.title("Resources & Tips");
+        System.out.println(box(
+                "Emergency: 112 (India)\n" +
+                "Women Helpline: 181\n" +
+                "Cybercrime Portal: https://cybercrime.gov.in (report online offenses)\n" +
+                "Local Police: Visit nearest station or district website for contacts\n" +
+                "Legal Aid: Search for state/district legal services authorities"
+        ));
+        UI.info("Always cross-check numbers and websites for your region.");
+        history.push("resources");
+    }
+
+    // ========= FEATURE 5: Manage Contacts =========
+    void manageContacts() {
+        while (true) {
+            UI.divider();
+            UI.title("Manage Emergency Contacts (PriorityQueue)");
+            System.out.println("1. View contacts");
+            System.out.println("2. Add contact");
+            System.out.println("3. Remove top-priority contact");
+            System.out.println("4. Clear all");
+            System.out.println("5. Back");
+            int ch = readInt("Choose: ");
+            switch (ch) {
+                case 1 -> {
+                    List<Contact> list = new ArrayList<>(emergencyContacts);
+                    Collections.sort(list);
+                    if (list.isEmpty()) UI.warn("No contacts added.");
+                    else {
+                        int i = 1;
+                        for (Contact c : list) System.out.println((i++) + ". " + c);
+                    }
+                }
+                case 2 -> {
+                    String name = prompt("Name: ");
+                    String phone = prompt("Phone: ");
+                    int pr = readInt("Priority (1-10; higher = more urgent): ");
+                    pr = Math.max(1, Math.min(10, pr));
+                    emergencyContacts.add(new Contact(name, phone, pr));
+                    UI.success("Contact added.");
+                }
+                case 3 -> {
+                    Contact removed = emergencyContacts.poll();
+                    if (removed == null) UI.warn("No contacts to remove.");
+                    else UI.success("Removed: " + removed);
+                }
+                case 4 -> {
+                    emergencyContacts.clear();
+                    UI.success("All contacts cleared.");
+                }
+                case 5 -> { return; }
+                default -> UI.error("Invalid choice.");
+            }
+        }
+    }
+
+    // ========= FEATURE 6: History =========
+    void viewHistory() {
+        UI.title("Session History (latest first)");
+        if (history.isEmpty()) {
+            UI.warn("No history recorded.");
+            return;
+        }
+        int count = 0;
+        for (int i = history.size()-1; i >= 0 && count < 20; i--, count++) {
+            System.out.println("• " + history.get(i));
+        }
+        if (yesNo("Undo last action (pop from history)?")) {
+            String last = history.pop();
+            UI.info("Undone: " + last);
+        }
+    }
+
+    // ========= UTILITIES =========
+    int readInt(String prompt) {
+        while (true) {
+            System.out.print(UI.c(UI.CYAN, prompt));
+            String line = in.nextLine();
+            try { return Integer.parseInt(line.trim()); }
+            catch (NumberFormatException e) { UI.error("Enter a valid number."); }
+        }
+    }
+
+    String prompt(String label) {
+        System.out.print(UI.c(UI.CYAN, label));
+        return in.nextLine().trim();
+    }
+    String promptLower(String label) {
+        System.out.print(UI.c(UI.CYAN, label));
+        return in.nextLine().trim().toLowerCase();
+    }
+    String promptMultiline(String label) {
+        System.out.println(UI.c(UI.CYAN, label));
+        StringBuilder sb = new StringBuilder();
+        while (true) {
+            String line = in.nextLine();
+            if (line.trim().equals(".")) break;
+            sb.append(line).append("\n");
+        }
+        return sb.toString().trim();
+    }
+    boolean yesNo(String label) {
+        while (true) {
+            System.out.print(UI.c(UI.CYAN, label + " (y/n): "));
+            String s = in.nextLine().trim().toLowerCase();
+            if (s.startsWith("y")) return true;
+            if (s.startsWith("n")) return false;
+            UI.error("Please type y or n.");
+        }
+    }
+
+    static String box(String inner) {
+        String[] lines = inner.split("\\R");
+        int max = 0;
+        for (String l : lines) max = Math.max(max, l.length());
+        String top = "┌" + "─".repeat(max + 2) + "┐";
+        String bot = "└" + "─".repeat(max + 2) + "┘";
+        StringBuilder sb = new StringBuilder();
+        sb.append(top).append("\n");
+        for (String l : lines) {
+            sb.append("│ ").append(padRight(l, max)).append(" │").append("\n");
+        }
+        sb.append(bot);
+        return sb.toString();
+    }
+    static String padRight(String s, int n) {
+        if (s.length() >= n) return s;
+        return s + " ".repeat(n - s.length());
+    }
+}
